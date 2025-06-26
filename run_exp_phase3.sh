@@ -274,19 +274,6 @@ run_energy_aware_autoscaler() {
     log_action "🚀 Energy-aware autoscaler started with PID: $AUTOSCALER_PID"
 }
 
-# Function to run energy-aware autoscaler in background
-run_energy_aware_autoscaler() {
-    log_action "🤖 Starting energy-aware autoscaler in background..."
-    
-    while true; do
-        energy_aware_autoscale
-        sleep "$AUTOSCALER_INTERVAL"
-    done &
-    
-    AUTOSCALER_PID=$!
-    log_action "🚀 Energy-aware autoscaler started with PID: $AUTOSCALER_PID"
-}
-
 # Function to stop autoscaler
 stop_energy_aware_autoscaler() {
     if [[ -n "$AUTOSCALER_PID" ]]; then
