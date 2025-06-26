@@ -37,7 +37,7 @@ class EnergyMonitor:
         metrics = {}
        
         # Enhanced queries for comprehensive metrics
-        replica_query = 'kube_deployment_status_replicas{deployment=~"s[0-9]+"}'
+        replica_query = 'kube_deployment_status_replicas{deployment=~"s[0-9]+"}'                                                
         power_query = 'rate(kepler_container_joules_total{container_namespace="default"}[5m])'
         rps_query = 'rate(mub_request_processing_latency_milliseconds_count{kubernetes_service=~"s[0-9]+"}[5m])'
         latency_p95_query = 'histogram_quantile(0.95, rate(mub_request_processing_latency_milliseconds_bucket{kubernetes_service=~"s[0-9]+"}[5m]))'
