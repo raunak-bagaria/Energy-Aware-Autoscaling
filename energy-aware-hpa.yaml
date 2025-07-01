@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: energy-aware-hpa-config
+  namespace: default
+data:
+  config.yaml: |
+    # Energy-Aware Autoscaling Configuration
+    energy_thresholds:
+      # EPR threshold in Joules per request
+      epr_scale_up_threshold: 0.001    # Scale up if EPR > 1mJ per request
+      epr_scale_down_threshold: 0.0005 # Scale down if EPR < 0.5mJ per request
+      
+      # Power consumption thresholds in Watts  
+      power_scale_up_threshold: 2.0    # Scale up if power > 2W per pod
+      power_scale_down_threshold: 0.5  # Scale down if power < 0.5W per pod
+    
+    performance_thresholds:
+      # Latency thresholds in milliseconds
+      latency_p95_threshold: 1000      # Scale up if P95 latency > 1000ms
+      latency_p99_threshold: 2000      # Scale up if P99 latency > 2000ms
+      
+      # RPS thresholds
+      rps_scale_up_threshold: 10       # Scale up if RPS > 10 per replica
+      rps_scale_down_threshold: 2      # Scale down if RPS < 2 per replica
+    
+    scaling_policies:
+      min_replicas: 1
+      max_replicas: 10
+      scale_up_cooldown: 180           # 3 minutes
+      scale_down_cooldown: 300         # 5 minutes
+    
+    services:
+      - name: s0
+        weight_energy: 0.6             # 60% weight for energy efficiency
+        weight_performance: 0.4        # 40% weight for performance
+      - name: s1
+        weight_energy: 0.5
+        weight_performance: 0.5
+      # Add other services as needed
+---
+apiVersion: v2beta2
+kind: HorizontalPodAutoscaler  
+metadata:
+  name: energy-aware-hpa-s0
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: s0
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  # CPU utilization (traditional metric)
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  # Custom metrics for energy awareness
+  - type: Pods
+    pods:
+      metric:
+        name: kepler_container_power_stat
+      target:
+        type: AverageValue
+        averageValue: "2"  # 2 Watts per pod
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 180
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleDown:  
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 60
