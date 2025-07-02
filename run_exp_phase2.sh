@@ -13,8 +13,15 @@ echo "=================================="
 
 # Configuration
 GATEWAY_URL="http://192.168.49.2:31113"
+PROMETHEUS_URL="http://192.168.49.2:30000"
 EXPERIMENT_START_TIME=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="phase2_log_${EXPERIMENT_START_TIME}.txt"
+
+# Working Prometheus queries (from updated energy_monitoring.py)
+RPS_QUERY='sum by (app_name) (rate(mub_internal_processing_latency_milliseconds_count{}[2m]))'
+SERVICE_DELAY_QUERY='sum by (app_name) (increase(mub_request_processing_latency_milliseconds_sum{}[2m])) / sum by (app_name) (increase(mub_request_processing_latency_milliseconds_count{}[2m]))'
+INTERNAL_DELAY_QUERY='sum by (app_name) (increase(mub_internal_processing_latency_milliseconds_sum{}[2m])) / sum by (app_name) (increase(mub_internal_processing_latency_milliseconds_count{}[2m]))'
+EXTERNAL_DELAY_QUERY='sum by (app_name) (increase(mub_external_processing_latency_milliseconds_sum{}[2m])) / sum by (app_name) (increase(mub_external_processing_latency_milliseconds_count{}[2m]))'
 
 # Function to log with timestamp
 log_action() {

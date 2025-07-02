@@ -17,9 +17,10 @@ RPS_SCALE_DOWN_THRESHOLD = 2.0    # Scale DOWN when RPS < 2.0 (was 0.5)
 # Prometheus Query Templates
 REPLICA_QUERY = 'kube_deployment_status_replicas{deployment=~"s[0-9]+"}'
 POWER_QUERY = 'rate(kepler_container_joules_total{container_namespace="default"}[5m])'
-RPS_QUERY = 'rate(mub_request_processing_latency_milliseconds_count{kubernetes_service=~"s[0-9]+"}[5m])'
-LATENCY_P95_QUERY = 'histogram_quantile(0.95, rate(mub_request_processing_latency_milliseconds_bucket{kubernetes_service=~"s[0-9]+"}[5m]))'
-LATENCY_P99_QUERY = 'histogram_quantile(0.99, rate(mub_request_processing_latency_milliseconds_bucket{kubernetes_service=~"s[0-9]+"}[5m]))'
+RPS_QUERY = 'sum by (app_name) (rate(mub_internal_processing_latency_milliseconds_count{}[2m]))'
+SERVICE_DELAY_QUERY = 'sum by (app_name) (increase(mub_request_processing_latency_milliseconds_sum{}[2m])) / sum by (app_name) (increase(mub_request_processing_latency_milliseconds_count{}[2m]))'
+INTERNAL_DELAY_QUERY = 'sum by (app_name) (increase(mub_internal_processing_latency_milliseconds_sum{}[2m])) / sum by (app_name) (increase(mub_internal_processing_latency_milliseconds_count{}[2m]))'
+EXTERNAL_DELAY_QUERY = 'sum by (app_name) (increase(mub_external_processing_latency_milliseconds_sum{}[2m])) / sum by (app_name) (increase(mub_external_processing_latency_milliseconds_count{}[2m]))'
 ENERGY_TOTAL_QUERY = 'kepler_container_joules_total{container_namespace="default"}'
 
 # Query Prometheus API

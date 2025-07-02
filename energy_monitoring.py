@@ -36,19 +36,28 @@ class EnergyMonitor:
     def get_service_metrics(self):
         metrics = {}
        
-        # Enhanced queries for comprehensive metrics
+        # Working queries based on your confirmed Prometheus queries
         replica_query = 'kube_deployment_status_replicas{deployment=~"s[0-9]+"}'                                                
         power_query = 'rate(kepler_container_joules_total{container_namespace="default"}[5m])'
-        rps_query = 'rate(mub_request_processing_latency_milliseconds_count{kubernetes_service=~"s[0-9]+"}[5m])'
-        latency_p95_query = 'histogram_quantile(0.95, rate(mub_request_processing_latency_milliseconds_bucket{kubernetes_service=~"s[0-9]+"}[5m]))'
-        latency_p99_query = 'histogram_quantile(0.99, rate(mub_request_processing_latency_milliseconds_bucket{kubernetes_service=~"s[0-9]+"}[5m]))'
+        
+        # Updated to use working muBench queries with app_name
+        rps_query = 'sum by (app_name) (rate(mub_internal_processing_latency_milliseconds_count{}[2m]))'
+        service_delay_query = '''sum by (app_name) (increase(mub_request_processing_latency_milliseconds_sum{}[2m])) / 
+                                sum by (app_name) (increase(mub_request_processing_latency_milliseconds_count{}[2m]))'''
+        internal_delay_query = '''sum by (app_name) (increase(mub_internal_processing_latency_milliseconds_sum{}[2m])) / 
+                                 sum by (app_name) (increase(mub_internal_processing_latency_milliseconds_count{}[2m]))'''
+        external_delay_query = '''sum by (app_name) (increase(mub_external_processing_latency_milliseconds_sum{}[2m])) / 
+                                 sum by (app_name) (increase(mub_external_processing_latency_milliseconds_count{}[2m]))'''
+        
         energy_total_query = 'kepler_container_joules_total{container_namespace="default"}'
        
+        # Execute all queries
         replica_data = self.query_prometheus(replica_query)
         power_data = self.query_prometheus(power_query)
         rps_data = self.query_prometheus(rps_query)
-        latency_p95_data = self.query_prometheus(latency_p95_query)
-        latency_p99_data = self.query_prometheus(latency_p99_query)
+        service_delay_data = self.query_prometheus(service_delay_query)
+        internal_delay_data = self.query_prometheus(internal_delay_query)
+        external_delay_data = self.query_prometheus(external_delay_query)
         energy_total_data = self.query_prometheus(energy_total_query)
 
         # Process replica data
@@ -81,35 +90,49 @@ class EnergyMonitor:
                     metrics[service] = {}
                 metrics[service]['power_watts'] = sum(power_values)
 
-        # Process RPS data
+        # Process RPS data using working query
         if rps_data and rps_data.get('data', {}).get('result'):
             for metric in rps_data['data']['result']:
-                service = metric['metric'].get('kubernetes_service', '')
-                if service:
-                    if service not in metrics:
-                        metrics[service] = {}
+                app_name = metric['metric'].get('app_name', '')
+                if app_name:
+                    if app_name not in metrics:
+                        metrics[app_name] = {}
                     rps_value = float(metric['value'][1])
-                    metrics[service]['rps'] = rps_value
+                    metrics[app_name]['rps'] = rps_value
+                    print(f"✅ RPS data for {app_name}: {rps_value:.3f}")
 
-        # Process latency P95 data
-        if latency_p95_data and latency_p95_data.get('data', {}).get('result'):
-            for metric in latency_p95_data['data']['result']:
-                service = metric['metric'].get('kubernetes_service', '')
-                if service:
-                    if service not in metrics:
-                        metrics[service] = {}
-                    latency_p95 = float(metric['value'][1])
-                    metrics[service]['latency_p95_ms'] = latency_p95
+        # Process service delay (total latency) data
+        if service_delay_data and service_delay_data.get('data', {}).get('result'):
+            for metric in service_delay_data['data']['result']:
+                app_name = metric['metric'].get('app_name', '')
+                if app_name:
+                    if app_name not in metrics:
+                        metrics[app_name] = {}
+                    delay_ms = float(metric['value'][1])
+                    metrics[app_name]['service_delay_ms'] = delay_ms
+                    print(f"✅ Service delay for {app_name}: {delay_ms:.3f}ms")
 
-        # Process latency P99 data
-        if latency_p99_data and latency_p99_data.get('data', {}).get('result'):
-            for metric in latency_p99_data['data']['result']:
-                service = metric['metric'].get('kubernetes_service', '')
-                if service:
-                    if service not in metrics:
-                        metrics[service] = {}
-                    latency_p99 = float(metric['value'][1])
-                    metrics[service]['latency_p99_ms'] = latency_p99
+        # Process internal delay data
+        if internal_delay_data and internal_delay_data.get('data', {}).get('result'):
+            for metric in internal_delay_data['data']['result']:
+                app_name = metric['metric'].get('app_name', '')
+                if app_name:
+                    if app_name not in metrics:
+                        metrics[app_name] = {}
+                    internal_delay = float(metric['value'][1])
+                    metrics[app_name]['internal_delay_ms'] = internal_delay
+                    print(f"✅ Internal delay for {app_name}: {internal_delay:.3f}ms")
+
+        # Process external delay data
+        if external_delay_data and external_delay_data.get('data', {}).get('result'):
+            for metric in external_delay_data['data']['result']:
+                app_name = metric['metric'].get('app_name', '')
+                if app_name:
+                    if app_name not in metrics:
+                        metrics[app_name] = {}
+                    external_delay = float(metric['value'][1])
+                    metrics[app_name]['external_delay_ms'] = external_delay
+                    print(f"✅ External delay for {app_name}: {external_delay:.3f}ms")
 
         # Process total energy data for EPR calculation
         if energy_total_data and energy_total_data.get('data', {}).get('result'):
@@ -147,43 +170,84 @@ class EnergyMonitor:
                 m['efficiency_rps_per_watt'] = rps / power
             else:
                 m['efficiency_rps_per_watt'] = 0
+            
+            # Calculate latency-based efficiency metrics
+            service_delay = m.get('service_delay_ms', 0)
+            if service_delay > 0 and rps > 0:
+                # Throughput efficiency: RPS per ms of latency
+                m['throughput_efficiency'] = rps / service_delay
+            else:
+                m['throughput_efficiency'] = 0
 
         return metrics
 
     def print_summary(self):
-        print(f"\n{'='*80}")
+        print(f"\n{'='*90}")
         print(f"ENERGY-AWARE AUTOSCALING METRICS SUMMARY")
         print(f"Timestamp: {datetime.now()}")
-        print(f"{'='*80}")
+        print(f"{'='*90}")
 
         metrics = self.get_service_metrics()
         if metrics:
             print(f"\n📈 COMPREHENSIVE SERVICE METRICS:")
-            print(f"{'Service':<8} {'Replicas':<8} {'RPS':<8} {'Power(W)':<9} {'EPR(mJ)':<9} {'Eff(R/W)':<9}")
-            print("-" * 60)
+            print(f"{'Service':<8} {'Rep':<4} {'RPS':<8} {'Power(W)':<9} {'SvcLat(ms)':<11} {'IntLat(ms)':<11} {'ExtLat(ms)':<11} {'EPR(mJ)':<9} {'Eff(R/W)':<9}")
+            print("-" * 90)
+            
             for service, m in metrics.items():
+                replicas = m.get('replicas', 'N/A')
+                rps = m.get('rps', 0)
+                power = m.get('power_watts', 0)
+                service_lat = m.get('service_delay_ms', 0)
+                internal_lat = m.get('internal_delay_ms', 0)  
+                external_lat = m.get('external_delay_ms', 0)
                 epr_mj = m.get('epr_joules_per_request', 0) * 1000  # Convert to millijoules
-                print(f"{service:<8} {m.get('replicas', 'N/A'):<8} {m.get('rps', 0):<8.2f} {m.get('power_watts', 0):<9.2f} "
-                      f"{epr_mj:<9.3f} {m.get('efficiency_rps_per_watt', 0):<9.3f}")
+                efficiency = m.get('efficiency_rps_per_watt', 0)
+                
+                print(f"{service:<8} {replicas:<4} {rps:<8.3f} {power:<9.3f} {service_lat:<11.1f} "
+                      f"{internal_lat:<11.1f} {external_lat:<11.1f} {epr_mj:<9.3f} {efficiency:<9.3f}")
             
             # Print insights
-            print(f"\n🔍 ENERGY INSIGHTS:")
-            high_epr_services = [svc for svc, m in metrics.items() if m.get('epr_joules_per_request', 0) > 0.001]
-            high_latency_services = [svc for svc, m in metrics.items() if m.get('latency_p99_ms', 0) > 1000]
-            inefficient_services = [svc for svc, m in metrics.items() if m.get('efficiency_rps_per_watt', 0) < 1.0 and m.get('rps', 0) > 0]
+            print(f"\n🔍 ENERGY & LATENCY INSIGHTS:")
+            
+            # Energy insights
+            high_epr_services = [svc for svc, m in metrics.items() if m.get('epr_joules_per_request', 0) > 0.005]
+            inefficient_services = [svc for svc, m in metrics.items() if m.get('efficiency_rps_per_watt', 0) < 0.1 and m.get('rps', 0) > 0]
+            
+            # Latency insights
+            high_service_latency = [svc for svc, m in metrics.items() if m.get('service_delay_ms', 0) > 100]
+            high_internal_latency = [svc for svc, m in metrics.items() if m.get('internal_delay_ms', 0) > 50]
+            high_external_latency = [svc for svc, m in metrics.items() if m.get('external_delay_ms', 0) > 50]
             
             if high_epr_services:
-                print(f"⚡ High EPR services (>1mJ/req): {', '.join(high_epr_services)}")
-            if high_latency_services:
-                print(f"🐌 High latency services (P99>1s): {', '.join(high_latency_services)}")
+                print(f"⚡ High EPR services (>5mJ/req): {', '.join(high_epr_services)}")
             if inefficient_services:
-                print(f"📉 Inefficient services (<1 RPS/W): {', '.join(inefficient_services)}")
+                print(f"📉 Energy inefficient services (<0.1 RPS/W): {', '.join(inefficient_services)}")
+            if high_service_latency:
+                print(f"🐌 High service latency (>100ms): {', '.join(high_service_latency)}")
+            if high_internal_latency:
+                print(f"🔧 High internal latency (>50ms): {', '.join(high_internal_latency)}")
+            if high_external_latency:
+                print(f"🌐 High external latency (>50ms): {', '.join(high_external_latency)}")
+                
+            # System totals
+            total_rps = sum(m.get('rps', 0) for m in metrics.values())
+            total_power = sum(m.get('power_watts', 0) for m in metrics.values())
+            total_replicas = sum(m.get('replicas', 0) for m in metrics.values() if isinstance(m.get('replicas'), int))
+            
+            print(f"\n🎯 SYSTEM TOTALS:")
+            print(f"   Total RPS: {total_rps:.3f}")
+            print(f"   Total Power: {total_power:.3f}W")
+            print(f"   Total Replicas: {total_replicas}")
+            if total_power > 0:
+                print(f"   Overall Efficiency: {total_rps/total_power:.6f} RPS/W")
+                
         else:
-            print("❌ No metrics available.")
+            print("❌ No metrics available - check Prometheus connection and muBench deployment")
 
     def run(self):
         print("🔋 Starting Energy-Aware Monitoring for muBench...")
         print(f"🔗 Connecting to Prometheus at: {self.prometheus_url}")
+        print("📊 Using working muBench queries for latency metrics")
        
         try:
             while True:

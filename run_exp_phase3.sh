@@ -173,7 +173,7 @@ def get_real_service_metrics():
     # Queries for real measurements
     replica_query = 'kube_deployment_status_replicas{deployment=~"s[0-9]+"}'
     power_query = 'rate(kepler_container_joules_total{container_namespace="default"}[5m])'
-    rps_query = 'rate(mub_request_processing_latency_milliseconds_count{kubernetes_service=~"s[0-9]+"}[5m])'
+    rps_query = 'sum by (app_name) (rate(mub_internal_processing_latency_milliseconds_count{}[2m]))'
     energy_total_query = 'kepler_container_joules_total{container_namespace="default"}'
     
     log_check("=== AUTOSCALER ITERATION START ===")
@@ -228,7 +228,7 @@ def get_real_service_metrics():
     # Process REAL RPS data
     if rps_data and rps_data.get('data', {}).get('result'):
         for metric in rps_data['data']['result']:
-            service = metric['metric'].get('kubernetes_service', '')
+            service = metric['metric'].get('app_name', '')
             if service:
                 if service not in metrics:
                     metrics[service] = {}
