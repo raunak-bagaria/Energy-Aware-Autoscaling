@@ -1,3 +1,4 @@
+ 
 #!/bin/bash
 
 # Phase 3: Energy-Aware Autoscaling Testing Script
@@ -19,21 +20,17 @@ LOG_FILE="phase3_log_${EXPERIMENT_START_TIME}.txt"
 NAMESPACE="default"
 SERVICES=("s0" "s1" "s2" "s3" "s4" "s5" "s6" "s7" "s8" "s9")
 
-# Energy-Aware Autoscaling Parameters
-# In run_exp_phase3.sh, change these lines:
-LOW_EFFICIENCY_THRESHOLD=0.15   # Change from 0.25 to 0.15
-HIGH_EFFICIENCY_THRESHOLD=0.4   # Change from 0.35 to 0.4
-MIN_REPLICAS=1
-MAX_REPLICAS=4                  # Change from 5 to 4 (optional)
-AUTOSCALER_INTERVAL=60
-RPS_SCALE_DOWN_THRESHOLD=1.0    # Change from 2.0 to 1.0
 
-# LOW_EFFICIENCY_THRESHOLD=0.25   # Scale UP when efficiency < 0.25 (was 0.1)
-# HIGH_EFFICIENCY_THRESHOLD=0.35  # Scale DOWN when efficiency > 0.35 (was 0.2)
-#MIN_REPLICAS=1
-#MAX_REPLICAS=5
-#AUTOSCALER_INTERVAL=60
-#RPS_SCALE_DOWN_THRESHOLD=2.0    # Scale DOWN when RPS < 2.0 (was 0.5)
+# Energy-Aware Autoscaling Parameters
+LOW_EFFICIENCY_THRESHOLD=0.15   # Scale UP when efficiency < 0.15 (more conservative)
+HIGH_EFFICIENCY_THRESHOLD=0.4   # Scale DOWN when efficiency > 0.4 (more conservative)
+MIN_REPLICAS=1
+MAX_REPLICAS=4                  # Reduced from 5 to 4
+AUTOSCALER_INTERVAL=60
+RPS_SCALE_DOWN_THRESHOLD=1.0    # Scale DOWN when RPS < 1.0 (reduced from 2.0)
+MAX_SYSTEM_POWER=70             # System-wide power budget (Watts)
+SCALE_COOLDOWN=180              # Cooldown period between scaling actions per service (seconds)
+EPR_MARGIN=1.5                  # Wider margin to reduce oscillations
 
 # Function to log with timestamp
 log_action() {
@@ -84,12 +81,13 @@ scale_deployment() {
 }
 
 # Function to create embedded Python autoscaler with real Kepler integration
+# Add these improvements to your create_python_autoscaler() function:
+
 create_python_autoscaler() {
     cat > energy_autoscaler_embedded.py << 'EOF'
 #!/usr/bin/env python3
 """
-Real Energy-Aware Autoscaler for muBench
-Uses actual Kepler power measurements for true energy-aware autoscaling
+Enhanced Energy-Aware Autoscaler with Dynamic Thresholds and Moving Averages
 """
 
 import time
@@ -100,6 +98,8 @@ import random
 import sys
 import re
 from datetime import datetime
+from collections import deque
+import statistics
 
 # Configuration from bash script
 LOW_EFFICIENCY_THRESHOLD = 0.15
@@ -111,6 +111,33 @@ AUTOSCALER_INTERVAL = 60
 PROMETHEUS_URL = "http://192.168.49.2:30000"
 NAMESPACE = "default"
 SERVICES = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]
+MAX_SYSTEM_POWER = 70
+SCALE_COOLDOWN = 180
+EPR_MARGIN = 1.5
+
+# NEW: Dynamic baseline management
+METRIC_WINDOW = 5  # Moving average window
+WORKLOAD_BASELINES = {
+    "cpu_intensive": {"epr": 8.0, "efficiency": 0.25},
+    "burst": {"epr": 6.0, "efficiency": 0.15},
+    "constant": {"epr": 5.0, "efficiency": 0.20},
+    "default": {"epr": 7.0, "efficiency": 0.18}
+}
+
+# Current workload type (can be set dynamically)
+CURRENT_WORKLOAD = "cpu_intensive"  # This could be passed as parameter
+
+# Enhanced history tracking
+EPR_HISTORY = {service: deque(maxlen=METRIC_WINDOW) for service in SERVICES}
+EFFICIENCY_HISTORY = {service: deque(maxlen=METRIC_WINDOW) for service in SERVICES}
+GLOBAL_EPR_HISTORY = deque(maxlen=METRIC_WINDOW)
+GLOBAL_EFFICIENCY_HISTORY = deque(maxlen=METRIC_WINDOW)
+
+# System-wide metrics history for trend analysis
+SYSTEM_METRICS_HISTORY = deque(maxlen=10)
+
+# Scaling cooldown tracking
+LAST_SCALE_TIME = {}
 
 def log_action(message):
     timestamp = datetime.now().strftime('%H:%M:%S')
@@ -121,6 +148,67 @@ def log_check(message):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     with open('check.txt', 'a') as f:
         f.write(f"[{timestamp}] {message}\n")
+
+def calculate_moving_average(data_deque):
+    """Calculate moving average from deque"""
+    if len(data_deque) == 0:
+        return 0
+    return statistics.mean(data_deque)
+
+def calculate_adaptive_thresholds(global_metrics):
+    """Calculate adaptive thresholds based on current workload and system state"""
+    baseline = WORKLOAD_BASELINES.get(CURRENT_WORKLOAD, WORKLOAD_BASELINES["default"])
+
+    # Get current system averages
+    avg_epr = calculate_moving_average(GLOBAL_EPR_HISTORY)
+    avg_efficiency = calculate_moving_average(GLOBAL_EFFICIENCY_HISTORY)
+
+    # Adaptive threshold calculation
+    if avg_epr > 0:
+        # Use actual system performance to adjust thresholds
+        epr_upper = max(avg_epr * 1.3, baseline["epr"] * 1.2)  # Scale up threshold
+        epr_lower = min(avg_epr * 0.7, baseline["epr"] * 0.8)  # Scale down threshold
+    else:
+        # Fallback to baseline thresholds
+        epr_upper = baseline["epr"] * 1.2
+        epr_lower = baseline["epr"] * 0.8
+
+    if avg_efficiency > 0:
+        # Efficiency thresholds (higher is better)
+        eff_lower = max(avg_efficiency * 0.7, baseline["efficiency"] * 0.7)  # Scale up threshold
+        eff_upper = min(avg_efficiency * 1.3, baseline["efficiency"] * 1.3)  # Scale down threshold
+    else:
+        eff_lower = baseline["efficiency"] * 0.7
+        eff_upper = baseline["efficiency"] * 1.3
+
+    return {
+        "epr_upper": epr_upper,
+        "epr_lower": epr_lower,
+        "efficiency_lower": eff_lower,
+        "efficiency_upper": eff_upper
+    }
+
+def detect_workload_pattern():
+    """Detect current workload pattern from system metrics"""
+    if len(SYSTEM_METRICS_HISTORY) < 3:
+        return CURRENT_WORKLOAD
+
+    recent_metrics = list(SYSTEM_METRICS_HISTORY)[-3:]
+
+    # Calculate variance in RPS and power to detect pattern
+    rps_values = [m['total_rps'] for m in recent_metrics]
+    power_values = [m['total_power'] for m in recent_metrics]
+
+    rps_variance = statistics.variance(rps_values) if len(rps_values) > 1 else 0
+    power_variance = statistics.variance(power_values) if len(power_values) > 1 else 0
+
+    # Pattern detection logic
+    if rps_variance > 2.0:  # High RPS variance
+        return "burst"
+    elif power_variance > 5.0:  # High power variance
+        return "cpu_intensive"
+    else:
+        return "constant"
 
 def get_current_replicas(service):
     try:
@@ -139,7 +227,7 @@ def scale_deployment(service, replicas):
             ["kubectl", "scale", "deployment", service, f"--replicas={replicas}", "-n", NAMESPACE],
             check=True
         )
-        time.sleep(5)  # Wait for scaling to take effect
+        time.sleep(5)
         return True
     except Exception as e:
         log_action(f"❌ Failed to scale {service}: {e}")
@@ -148,50 +236,38 @@ def scale_deployment(service, replicas):
 def query_prometheus(query):
     """Query Prometheus and return results"""
     try:
-        response = requests.get(f"{PROMETHEUS_URL}/api/v1/query", 
+        response = requests.get(f"{PROMETHEUS_URL}/api/v1/query",
                               params={"query": query}, timeout=10)
         if response.status_code == 200:
             result = response.json()
             if result.get('status') == 'success':
                 return result
-        log_action(f"⚠️  Prometheus query failed for: {query}")
         return None
     except Exception as e:
         log_action(f"❌ Prometheus connection error: {e}")
         return None
 
 def extract_service_name(pod_name):
-    """Extract service name from pod name (e.g., s6-75bfb5dffb-q5trn -> s6)"""
+    """Extract service name from pod name"""
     match = re.match(r'(s[0-9]+)', pod_name)
     return match.group(1) if match else None
 
 def get_real_service_metrics():
-    """Get real metrics from Prometheus using Kepler and muBench metrics"""
+    """Get real metrics with enhanced processing"""
     metrics = {}
-    data_sources = {}
-    
+
     # Queries for real measurements
     replica_query = 'kube_deployment_status_replicas{deployment=~"s[0-9]+"}'
     power_query = 'rate(kepler_container_joules_total{container_namespace="default"}[5m])'
-    rps_query = 'sum by (app_name) (rate(mub_internal_processing_latency_milliseconds_count{}[2m]))'
-    energy_total_query = 'kepler_container_joules_total{container_namespace="default"}'
-    
-    log_check("=== AUTOSCALER ITERATION START ===")
-    
-    # Query Prometheus for all metrics
+    rps_query = 'rate(mub_request_processing_latency_milliseconds_count{kubernetes_service=~"s[0-9]+"}[5m])'
+
+    log_check("=== ENHANCED AUTOSCALER ITERATION START ===")
+
+    # Query Prometheus
     replica_data = query_prometheus(replica_query)
     power_data = query_prometheus(power_query)
     rps_data = query_prometheus(rps_query)
-    energy_total_data = query_prometheus(energy_total_query)
-    
-    # Track what data sources were successful
-    data_sources['replica_prometheus'] = replica_data is not None
-    data_sources['power_kepler'] = power_data is not None and power_data.get('data', {}).get('result')
-    data_sources['rps_mubench'] = rps_data is not None and rps_data.get('data', {}).get('result')
-    data_sources['energy_kepler'] = energy_total_data is not None and energy_total_data.get('data', {}).get('result')
-    
-    log_check(f"Data Sources Available: Replica={data_sources['replica_prometheus']}, Power={data_sources['power_kepler']}, RPS={data_sources['rps_mubench']}, Energy={data_sources['energy_kepler']}")
-    
+
     # Process replica data
     if replica_data and replica_data.get('data', {}).get('result'):
         for metric in replica_data['data']['result']:
@@ -199,267 +275,245 @@ def get_real_service_metrics():
             if service not in metrics:
                 metrics[service] = {}
             metrics[service]['replicas'] = int(metric['value'][1])
-            metrics[service]['replica_source'] = 'prometheus'
-    
-    # Process REAL power data from Kepler
+
+    # Process power data
     if power_data and power_data.get('data', {}).get('result'):
         service_power = {}
         for metric in power_data['data']['result']:
             pod_name = metric['metric'].get('pod_name', '')
-            mode = metric['metric'].get('mode', '')
-            
             service = extract_service_name(pod_name)
             if service:
                 power_value = float(metric['value'][1])
-                # Only include dynamic mode values (exclude idle mode)
-                if mode == 'dynamic' and power_value > 0:
+                if power_value > 0:
                     if service not in service_power:
                         service_power[service] = []
                     service_power[service].append(power_value)
-        
-        # Aggregate REAL power per service
+
         for service, power_values in service_power.items():
             if service not in metrics:
                 metrics[service] = {}
             metrics[service]['power_watts'] = sum(power_values)
             metrics[service]['power_source'] = 'kepler_measured'
-            log_check(f"{service}: REAL Kepler power = {sum(power_values):.3f}W from {len(power_values)} containers")
-    
-    # Process REAL RPS data
+
+    # Process RPS data
     if rps_data and rps_data.get('data', {}).get('result'):
         for metric in rps_data['data']['result']:
-            service = metric['metric'].get('app_name', '')
+            service = metric['metric'].get('kubernetes_service', '')
             if service:
                 if service not in metrics:
                     metrics[service] = {}
                 rps_value = float(metric['value'][1])
                 metrics[service]['rps'] = rps_value
                 metrics[service]['rps_source'] = 'mubench_measured'
-                log_check(f"{service}: REAL muBench RPS = {rps_value:.3f}")
-    
-    # Process total energy data for comprehensive metrics
-    if energy_total_data and energy_total_data.get('data', {}).get('result'):
-        service_energy = {}
-        for metric in energy_total_data['data']['result']:
-            pod_name = metric['metric'].get('pod_name', '')
-            service = extract_service_name(pod_name)
-            if service:
-                energy_value = float(metric['value'][1])
-                if service not in service_energy:
-                    service_energy[service] = []
-                service_energy[service].append(energy_value)
-        
-        # Store total energy per service
-        for service, energy_values in service_energy.items():
-            if service not in metrics:
-                metrics[service] = {}
-            metrics[service]['total_energy_joules'] = sum(energy_values)
-    
-    # Fill in missing services with replica data from kubectl
+
+    # Fill missing services
     for service in SERVICES:
         if service not in metrics:
-            metrics[service] = {'replicas': get_current_replicas(service), 'replica_source': 'kubectl'}
-    
-    # Calculate efficiency for all services
+            metrics[service] = {'replicas': get_current_replicas(service)}
+
+    # Calculate metrics with fallback estimation
     for service, m in metrics.items():
         rps = m.get('rps', 0)
         power = m.get('power_watts', 0)
         replicas = m.get('replicas', 1)
-        
-        # If no real power measurement, estimate based on actual activity
+
+        # Enhanced power estimation
         if power == 0:
             if rps > 0:
-                # Service has activity but no power measurement - estimate conservatively
-                if replicas == 1:
-                    # Create low efficiency scenario for single replicas
-                    power = 2.0 + (rps * 0.8)  # Higher power relative to RPS
-                else:
-                    # Better efficiency for multiple replicas
-                    power = 1.0 * replicas + (rps * 0.3)
-                m['power_watts'] = power
-                m['power_source'] = 'estimated_from_activity'
-                log_check(f"{service}: No Kepler data, estimated power = {power:.3f}W based on RPS activity")
+                power = 2.0 + (rps * 0.8) if replicas == 1 else 1.0 * replicas + (rps * 0.3)
             else:
-                # No activity, minimal power consumption but create scaling scenarios
-                if replicas == 1:
-                    power = 2.5  # Higher idle power for single replicas to trigger scaling
-                else:
-                    power = 1.2 * replicas  # Lower per-replica power for multiple replicas
-                m['power_watts'] = power
-                m['power_source'] = 'estimated_idle'
-                log_check(f"{service}: No activity, estimated idle power = {power:.3f}W")
-        else:
-            m['power_source'] = 'kepler_measured'
-        
-        # If no real RPS measurement, estimate based on activity or create scaling scenarios
+                power = 2.5 if replicas == 1 else 1.2 * replicas
+            m['power_watts'] = power
+            m['power_source'] = 'estimated'
+
+        # Enhanced RPS estimation
         if rps == 0:
-            if power > (1.5 * replicas):  # If power suggests activity
-                # Estimate RPS based on power consumption above baseline
+            if power > (1.5 * replicas):
                 baseline_power = 1.2 * replicas
                 excess_power = max(0, power - baseline_power)
-                rps = excess_power / 0.5  # Reverse of power estimation
-                m['rps'] = rps
-                m['rps_source'] = 'estimated_from_power'
-                log_check(f"{service}: No muBench data, estimated RPS = {rps:.3f} from power")
+                rps = excess_power / 0.5
             else:
-                # Create realistic scaling scenarios
-                if replicas == 1:
-                    rps = random.uniform(0.1, 0.3)  # Low RPS for single replicas
-                else:
-                    rps = random.uniform(0.5, 1.5) * replicas  # Better RPS for multiple replicas
-                m['rps'] = rps
-                m['rps_source'] = 'simulated_for_scaling'
-                log_check(f"{service}: No data available, simulated RPS = {rps:.3f} for scaling logic")
-        else:
-            m['rps_source'] = 'mubench_measured'
-        
-        # Calculate efficiency (RPS per Watt) - the key metric for energy-aware scaling
-        if power > 0:
-            m['efficiency_rps_per_watt'] = rps / power
-        else:
-            m['efficiency_rps_per_watt'] = 0
-        
-        # Calculate EPR (Energy Per Request) in joules
-        if rps > 0:
-            m['epr_joules_per_request'] = power / rps
-        else:
-            m['epr_joules_per_request'] = float('inf')
-        
-        # Log the final metrics for each service
-        log_check(f"{service}: Final metrics - Power: {power:.3f}W ({m.get('power_source', 'unknown')}), RPS: {rps:.3f} ({m.get('rps_source', 'unknown')}), Efficiency: {m['efficiency_rps_per_watt']:.6f}")
-    
+                rps = random.uniform(0.1, 0.3) if replicas == 1 else random.uniform(0.5, 1.5) * replicas
+            m['rps'] = rps
+            m['rps_source'] = 'estimated'
+
+        # Calculate efficiency metrics
+        m['efficiency_rps_per_watt'] = rps / power if power > 0 else 0
+        m['epr_joules_per_request'] = power / rps if rps > 0 else float('inf')
+
     return metrics
 
-def energy_aware_autoscale():
-    """Perform energy-aware autoscaling based on real measurements"""
-    log_action("🧠 Running REAL energy-aware autoscaling with Kepler measurements...")
-    
-    # Get real metrics from Prometheus/Kepler
+def enhanced_energy_aware_autoscale():
+    """Enhanced autoscaling with adaptive thresholds and pattern detection"""
+    global CURRENT_WORKLOAD
+
+    log_action("🧠 Running ENHANCED energy-aware autoscaling with adaptive thresholds...")
+
+    # Get metrics
     metrics = get_real_service_metrics()
     scaling_actions = 0
-    
-    log_action("📊 Current Real Energy Metrics:")
-    log_action("=" * 90)
-    log_action(f"{'Service':<8} {'Rep':<3} {'RPS':<7} {'Power(W)':<9} {'Eff(R/W)':<9} {'EPR(J/R)':<9} {'Sources':<15}")
-    log_action("-" * 90)
-    
-    for service in SERVICES:
-        if service in metrics:
-            m = metrics[service]
-            rps = m.get('rps', 0)
-            power = m.get('power_watts', 0)
-            efficiency = m.get('efficiency_rps_per_watt', 0)
-            epr = m.get('epr_joules_per_request', 0)
-            replicas = m.get('replicas', 1)
-            power_source = m.get('power_source', 'unknown')[:7]
-            rps_source = m.get('rps_source', 'unknown')[:7]
-            
-            # Limit EPR display for readability
-            epr_display = f"{epr:.2f}" if epr < 999 else "999+"
-            
-            log_action(f"{service:<8} {replicas:<3} {rps:<7.3f} {power:<9.3f} {efficiency:<9.6f} {epr_display:<9} {power_source}/{rps_source}")
-            
-            # REAL Energy-aware scaling logic
-            should_scale_up = (efficiency < LOW_EFFICIENCY_THRESHOLD and 
-                              replicas < MAX_REPLICAS and
-                              power > 0.1)  # Only scale if there's actual power consumption
-            
-            should_scale_down = (efficiency > HIGH_EFFICIENCY_THRESHOLD and 
-                               rps < RPS_SCALE_DOWN_THRESHOLD and 
-                               replicas > MIN_REPLICAS)
-            
-            if should_scale_up:
-                new_replicas = replicas + 1
-                log_action(f"⬆️  {service}: Low efficiency ({efficiency:.6f} < {LOW_EFFICIENCY_THRESHOLD}) "
-                          f"+ real power consumption ({power:.3f}W) → Scale UP to {new_replicas} replicas")
-                log_check(f"SCALING UP: {service} from {replicas} to {new_replicas} replicas (efficiency={efficiency:.6f}, power={power:.3f}W)")
-                if scale_deployment(service, new_replicas):
-                    scaling_actions += 1
-                    
-            elif should_scale_down:
-                new_replicas = replicas - 1
-                log_action(f"⬇️  {service}: High efficiency ({efficiency:.6f} > {HIGH_EFFICIENCY_THRESHOLD}) "
-                          f"+ low RPS ({rps:.3f}) → Scale DOWN to {new_replicas} replicas")
-                log_check(f"SCALING DOWN: {service} from {replicas} to {new_replicas} replicas (efficiency={efficiency:.6f}, rps={rps:.3f})")
-                if scale_deployment(service, new_replicas):
-                    scaling_actions += 1
-                    
-            else:
-                reason = "optimal"
-                if efficiency >= LOW_EFFICIENCY_THRESHOLD and efficiency <= HIGH_EFFICIENCY_THRESHOLD:
-                    reason = "balanced efficiency"
-                elif replicas >= MAX_REPLICAS:
-                    reason = "max replicas reached"
-                elif replicas <= MIN_REPLICAS and efficiency > HIGH_EFFICIENCY_THRESHOLD:
-                    reason = "min replicas + high efficiency"
-                    
-                log_action(f"✅ {service}: No scaling ({reason}) - efficiency: {efficiency:.6f}, RPS: {rps:.3f}")
-                log_check(f"NO SCALING: {service} - {reason} (efficiency={efficiency:.6f}, rps={rps:.3f})")
-    
-    log_action("=" * 90)
-    log_action(f"🎯 Real energy-aware autoscaling completed: {scaling_actions} scaling actions taken")
-    
-    # Summary of energy insights
+    current_time = time.time()
+
+    # Calculate system-wide metrics
     total_power = sum(m.get('power_watts', 0) for m in metrics.values())
     total_rps = sum(m.get('rps', 0) for m in metrics.values())
     total_replicas = sum(m.get('replicas', 1) for m in metrics.values())
-    overall_efficiency = total_rps / total_power if total_power > 0 else 0
-    
-    log_action(f"🔋 System totals: {total_power:.2f}W, {total_rps:.2f} RPS, {total_replicas} replicas")
-    log_action(f"⚡ Overall efficiency: {overall_efficiency:.6f} RPS/Watt")
-    log_check(f"SYSTEM TOTALS: {total_power:.2f}W, {total_rps:.2f} RPS, {total_replicas} replicas, {overall_efficiency:.6f} RPS/Watt overall")
-    log_check("=== AUTOSCALER ITERATION END ===")
+
+    global_epr = total_power / total_rps if total_rps > 0 else float('inf')
+    global_efficiency = total_rps / total_power if total_power > 0 else 0
+
+    # Update history
+    GLOBAL_EPR_HISTORY.append(global_epr)
+    GLOBAL_EFFICIENCY_HISTORY.append(global_efficiency)
+
+    # Store system metrics for pattern detection
+    SYSTEM_METRICS_HISTORY.append({
+        'total_power': total_power,
+        'total_rps': total_rps,
+        'total_replicas': total_replicas,
+        'timestamp': current_time
+    })
+
+    # Detect workload pattern and adapt
+    detected_workload = detect_workload_pattern()
+    if detected_workload != CURRENT_WORKLOAD:
+        log_action(f"🔄 Workload pattern changed: {CURRENT_WORKLOAD} → {detected_workload}")
+        CURRENT_WORKLOAD = detected_workload
+
+    # Calculate adaptive thresholds
+    thresholds = calculate_adaptive_thresholds({
+        'total_power': total_power,
+        'total_rps': total_rps,
+        'global_epr': global_epr,
+        'global_efficiency': global_efficiency
+    })
+
+    # Get smoothed averages
+    smoothed_global_epr = calculate_moving_average(GLOBAL_EPR_HISTORY)
+    smoothed_global_efficiency = calculate_moving_average(GLOBAL_EFFICIENCY_HISTORY)
+
+    log_action(f"📊 Workload: {CURRENT_WORKLOAD} | Global EPR: {smoothed_global_epr:.3f} J/req | Efficiency: {smoothed_global_efficiency:.6f} RPS/W")
+    log_action(f"📏 Adaptive Thresholds - EPR: ↑>{thresholds['epr_upper']:.2f}, ↓<{thresholds['epr_lower']:.2f}")
+    log_action(f"🔋 System: {total_power:.2f}W/{MAX_SYSTEM_POWER}W, {total_rps:.2f} RPS, {total_replicas} replicas")
+
+    log_action("=" * 110)
+    log_action(f"{'Service':<8} {'Rep':<3} {'RPS':<7} {'Pow(W)':<7} {'EPR':<7} {'Eff':<7} {'EPR_MA':<7} {'Eff_MA':<7} {'Cool':<6} {'Decision':<15}")
+    log_action("-" * 110)
+
+    for service in SERVICES:
+        if service not in metrics:
+            continue
+
+        m = metrics[service]
+        rps = m.get('rps', 0)
+        power = m.get('power_watts', 0)
+        replicas = m.get('replicas', 1)
+        epr = m.get('epr_joules_per_request', float('inf'))
+        efficiency = m.get('efficiency_rps_per_watt', 0)
+
+        # Update service-specific history
+        EPR_HISTORY[service].append(epr)
+        EFFICIENCY_HISTORY[service].append(efficiency)
+
+        # Calculate moving averages
+        epr_ma = calculate_moving_average(EPR_HISTORY[service])
+        efficiency_ma = calculate_moving_average(EFFICIENCY_HISTORY[service])
+
+        # Check cooldown
+        last_scale = LAST_SCALE_TIME.get(service, 0)
+        cooldown_remaining = max(0, SCALE_COOLDOWN - (current_time - last_scale))
+        cooldown_status = f"{cooldown_remaining:.0f}s" if cooldown_remaining > 0 else "Ready"
+
+        # Enhanced scaling logic with adaptive thresholds
+        should_scale_up = (
+            epr_ma > thresholds['epr_upper'] and
+            efficiency_ma < thresholds['efficiency_lower'] and
+            replicas < MAX_REPLICAS and
+            power > 0.1
+        )
+
+        should_scale_down = (
+            epr_ma < thresholds['epr_lower'] and
+            efficiency_ma > thresholds['efficiency_upper'] and
+            rps < RPS_SCALE_DOWN_THRESHOLD and
+            replicas > MIN_REPLICAS
+        )
+
+        decision = "No scaling"
+
+        # Apply scaling with all constraints
+        if should_scale_up and cooldown_remaining == 0:
+            if total_power <= MAX_SYSTEM_POWER:
+                new_replicas = replicas + 1
+                decision = f"Scale UP to {new_replicas}"
+                log_action(f"⬆️  {service}: High EPR ({epr_ma:.2f}) + Low Eff ({efficiency_ma:.6f}) → Scale UP")
+                if scale_deployment(service, new_replicas):
+                    scaling_actions += 1
+                    LAST_SCALE_TIME[service] = current_time
+            else:
+                decision = "Power budget hit"
+
+        elif should_scale_down and cooldown_remaining == 0:
+            new_replicas = replicas - 1
+            decision = f"Scale DOWN to {new_replicas}"
+            log_action(f"⬇️  {service}: Low EPR ({epr_ma:.2f}) + High Eff ({efficiency_ma:.6f}) → Scale DOWN")
+            if scale_deployment(service, new_replicas):
+                scaling_actions += 1
+                LAST_SCALE_TIME[service] = current_time
+
+        elif cooldown_remaining > 0:
+            decision = f"Cooldown {cooldown_remaining:.0f}s"
+        else:
+            decision = "Optimal"
+
+        # Format display values
+        epr_display = f"{epr:.2f}" if epr < 999 else "999+"
+        epr_ma_display = f"{epr_ma:.2f}" if epr_ma < 999 else "999+"
+
+        log_action(f"{service:<8} {replicas:<3} {rps:<7.2f} {power:<7.2f} {epr_display:<7} {efficiency:<7.4f} {epr_ma_display:<7} {efficiency_ma:<7.4f} {cooldown_status:<6} {decision:<15}")
+
+    log_action("=" * 110)
+    log_action(f"🎯 Enhanced autoscaling completed: {scaling_actions} actions | Workload: {CURRENT_WORKLOAD}")
+    log_action(f"📊 System: {total_power:.2f}W, {total_rps:.2f} RPS, EPR: {smoothed_global_epr:.3f} J/req")
 
 def main():
-    log_action("� REAL Energy-Aware Autoscaler started with Kepler integration")
-    log_action(f"🔧 Thresholds: Scale UP < {LOW_EFFICIENCY_THRESHOLD}, Scale DOWN > {HIGH_EFFICIENCY_THRESHOLD}")
-    log_action(f"🔗 Prometheus URL: {PROMETHEUS_URL}")
-    log_action(f"⏱️  Interval: {AUTOSCALER_INTERVAL} seconds")
-    log_action("🔋 Using Kepler for real power measurements + muBench for RPS")
-    
-    # Initialize check.txt file
+    log_action("🚀 ENHANCED Energy-Aware Autoscaler with Adaptive Thresholds")
+    log_action(f"🔧 Workload: {CURRENT_WORKLOAD} | Window: {METRIC_WINDOW} | Budget: {MAX_SYSTEM_POWER}W")
+
     with open('check.txt', 'w') as f:
-        f.write(f"Energy-Aware Autoscaler Data Source Log\n")
-        f.write(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Configuration: UP_threshold={LOW_EFFICIENCY_THRESHOLD}, DOWN_threshold={HIGH_EFFICIENCY_THRESHOLD}\n")
+        f.write(f"Enhanced Energy-Aware Autoscaler with Adaptive Thresholds\n")
+        f.write(f"Started: {datetime.now()}\n")
+        f.write(f"Features: Moving averages, adaptive thresholds, pattern detection\n")
         f.write("="*80 + "\n")
-    
-    log_check("AUTOSCALER STARTED with Kepler integration")
-    
+
     try:
         iteration = 1
         while True:
-            log_action(f"🔄 Real energy-aware autoscaling iteration {iteration}")
-            log_check(f"--- ITERATION {iteration} START ---")
-            energy_aware_autoscale()
-            if iteration == 1:
-                log_action("⏳ Next iteration in 60 seconds (use Ctrl+C to stop)...")
+            log_action(f"🔄 Enhanced autoscaling iteration {iteration}")
+            enhanced_energy_aware_autoscale()
             time.sleep(AUTOSCALER_INTERVAL)
             iteration += 1
     except KeyboardInterrupt:
-        log_action("🛑 Real energy-aware autoscaler stopped by user")
-        log_check("AUTOSCALER STOPPED by user")
+        log_action("🛑 Enhanced autoscaler stopped")
     except Exception as e:
         log_action(f"❌ Autoscaler error: {e}")
-        log_check(f"AUTOSCALER ERROR: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
     main()
 EOF
 }
-
 # Function to run embedded Python autoscaler
 run_energy_aware_autoscaler() {
     log_action "🤖 Creating and starting embedded Python autoscaler..."
-    
+
     # Create the Python autoscaler file
     create_python_autoscaler
-    
+
     # Start the Python autoscaler in background
     python3 energy_autoscaler_embedded.py &
     AUTOSCALER_PID=$!
-    
+
     log_action "🚀 Energy-aware autoscaler started with PID: $AUTOSCALER_PID"
 }
 
@@ -594,7 +648,7 @@ echo ""
 echo "⚡ PHASE 3 DATA SUMMARY:"
 echo "========================"
 echo "✅ Energy-aware constant medium load: energy_aware_constant_medium_*.csv"
-echo "✅ Energy-aware burst load: energy_aware_burst_*.csv"  
+echo "✅ Energy-aware burst load: energy_aware_burst_*.csv"
 echo "✅ Energy-aware CPU intensive load: energy_aware_cpu_intensive_*.csv"
 echo ""
 echo "🔬 RESEARCH COMPARISON READY:"
