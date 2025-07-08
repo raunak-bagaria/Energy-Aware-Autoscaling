@@ -1,0 +1,90 @@
+{
+  "s0": {
+    "external_services": [
+      {
+        "seq_len": 100,
+        "services": ["s1","s2","s3"
+        ]
+      }
+    ],
+    "internal_service": {
+      "compute_pi": {
+        "mean_response_size": 10,
+        "range_complexity": [400, 600]
+      }
+    },
+    "request_method": "rest",
+    "workers": 4,
+    "threads": 16,
+    "url": "s0.default.svc.cluster.local",
+    "path": "/api/v1",
+    "image": "msvcbench/microservice_v6-screen:1.0",
+    "namespace": "default"
+  },
+  "s1": {
+    "external_services": [
+      {
+        "seq_len": 1,
+        "services": [
+        ]
+      }
+    ],
+    "internal_service": {
+        "compute_pi": {
+         "mean_response_size": 15,
+         "range_complexity": [1500, 2500]
+      }
+    },
+    "request_method": "rest",
+    "workers": 4,
+    "threads": 16,
+    "url": "s1.default.svc.cluster.local",
+    "path": "/api/v1",
+    "image": "msvcbench/microservice_v6-screen:1.0",
+    "namespace": "default"
+  },
+  "s2": {
+    "external_services": [
+      {
+        "seq_len": 1,
+        "services": [
+        ]
+      }
+    ],
+    "internal_service": {
+            "compute_pi": {
+        "mean_response_size": 12,
+        "range_complexity": [800, 1200]
+      }
+    },
+    "request_method": "rest",
+    "workers": 4,
+    "threads": 16,
+    "url": "s2.default.svc.cluster.local",
+    "path": "/api/v1",
+    "image": "msvcbench/microservice_v6-screen:1.0",
+    "namespace": "default"
+  },
+  "s3": {
+    "external_services": [
+      {
+        "seq_len": 1,
+        "services": [
+        ]
+      }
+    ],
+    "internal_service": {
+      "compute_pi": {
+        "mean_response_size": 8,
+        "range_complexity": [200, 400]
+      }
+    },
+    "request_method": "rest",
+    "workers": 4,
+    "threads": 16,
+    "url": "s3.default.svc.cluster.local",
+    "path": "/api/v1",
+    "image": "msvcbench/microservice_v6-screen:1.0",
+    "namespace": "default"
+  }
+}
