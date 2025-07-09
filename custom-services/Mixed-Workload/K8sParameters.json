@@ -1,0 +1,22 @@
+{
+   "K8sParameters": {
+      "prefix_yaml_file":"mubench",
+      "namespace": "default",
+      "image": "msvcbench/microservice:latest",
+      "cluster_domain": "cluster",
+      "path": "/api/v1",
+      "dns-resolver":"coredns.kube-system.svc.cluster.local",
+      "scheduler-name": "default-scheduler",
+      "sleep": 0,
+      "nginx-gw": true,
+      "nginx-svc-type": "NodePort",
+      "no-apply": false,
+      "cpu-requests": "100m",
+      "memory-requests": "128Mi",
+      "cpu-limits": "1000m",
+      "memory-limits": "512Mi"
+   },
+   "InternalServiceFilePath": "CustomFunctions",
+   "OutputPath": "SimulationWorkspace",
+   "WorkModelPath": "Examples/workmodelC-multi.json"
+}
