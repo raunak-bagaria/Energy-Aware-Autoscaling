@@ -1,17 +1,16 @@
 #!/bin/bash
 
-# Phase 3: Energy-Aware Autoscaling Testing Script for 20-service Mixed Workload (SHORT VERSION - 12-15 minutes)
+# Phase 3: Energy-Aware Autoscaling Testing Script for 7-service Mixed Workload (SHORT VERSION - 12-15 minutes)
 # This script implements Phase 3 with custom energy-aware autoscaling
 
 set -e  # Exit on any error
 
-echo "⚡ PHASE 3: Energy-Aware Autoscaling Testing (20-Service Mixed Workload) - SHORT VERSION"
+echo "⚡ PHASE 3: Energy-Aware Autoscaling Testing (7-Service Mixed Workload) - SHORT VERSION"
 echo "======================================================================================="
 echo "⏰ Start time: $(date)"
-echo "🎯 Goal: Test energy-aware autoscaling and collect data (12-15 minute log_action "📈 Collecting energy-aware CPU-intensive data for 3 minutes..."
-python3 research_data_collector.py --mode experiment --scenario energy_aware_cpu_intensive_mixed --duration 180 &ntime)"
-echo "🧮 Workload: 20-service heterogeneous workload (CPU+Memory+I/O)"
-echo "📊 Services: s0[Gateway], s1-s2,s5-s6[Memory], s4[I/O], s8,s10-s19[CPU]"
+echo "🎯 Goal: Test energy-aware autoscaling and collect data (12-15 minute runtime)"
+echo "🧮 Workload: 7-service heterogeneous workload (CPU+Memory+I/O)"
+echo "📊 Services: s0[Gateway], s1-s2[Memory], s3-s4[I/O], s5[CPU], s6[CPU+Memory]"
 echo "⚡ Optimized: Short durations, reduced cooldowns for quick testing"
 echo "======================================================================================="
 
@@ -24,10 +23,11 @@ NAMESPACE="default"
 
 # Define services by workload type (based on actual workmodel)
 GATEWAY_SERVICES=("s0")                                           # Gateway service (no stress)
-MEMORY_SERVICES=("s1" "s2" "s6" "s9" "s12" "s13")                # Memory stress services
-IO_SERVICES=("s3" "s4" "s5" "s7" "s10" "s11" "s14" "s15" "s16" "s17" "s18" "s19")  # Disk I/O services
-CPU_SERVICES=("s8")                                               # Pure CPU service (π computation)
-ALL_SERVICES=("s0" "s1" "s2" "s3" "s4" "s5" "s6" "s7" "s8" "s9" "s10" "s11" "s12" "s13" "s14" "s15" "s16" "s17" "s18" "s19")
+MEMORY_SERVICES=("s1" "s2")                                       # Memory stress services
+IO_SERVICES=("s3" "s4")                                           # Disk I/O services
+CPU_SERVICES=("s5")                                               # Pure CPU service (π computation)
+MIXED_SERVICES=("s6")                                             # Services with both CPU and Memory
+ALL_SERVICES=("s0" "s1" "s2" "s3" "s4" "s5" "s6")
 
 # Energy-Aware Autoscaling Parameters (optimized for mixed workload)
 LOW_EFFICIENCY_THRESHOLD=0.08   # Scale UP when efficiency < 0.08 (adapted for mixed complexity)
@@ -457,14 +457,19 @@ AUTOSCALER_PID=$!
 # Wait for initial stabilization
 wait_with_countdown 30 "load warmup and energy autoscaler initialization"
 
-# Collect data for 2.5 minutes
-log_action "📈 Collecting energy-aware constant load data for 2.5 minutes..."
-python3 research_data_collector.py --mode experiment --scenario energy_aware_constant_medium_mixed --duration 150 &
+# Collect data for 3 minutes (must use integer minutes)
+log_action "📈 Collecting energy-aware constant load data for 3 minutes..."
+# Duration is in minutes in the research_data_collector.py - must use integer minutes
+python3 research_data_collector.py --mode experiment --scenario energy_aware_constant_medium_mixed --duration 3 --prometheus-url "$PROMETHEUS_URL" &
 COLLECT_PID=$!
 
 # Wait for data collection to complete
 wait $COLLECT_PID
 log_action "✅ Data collection completed"
+
+# Kill any remaining research_data_collector.py processes to avoid continued metric collection
+log_action "🧹 Cleaning up any lingering data collector processes..."
+pkill -f "python3 research_data_collector.py" || true
 
 # Stop autoscaler and load test
 kill $AUTOSCALER_PID 2>/dev/null || true
@@ -488,14 +493,19 @@ AUTOSCALER_PID=$!
 # Wait for stabilization
 wait_with_countdown 30 "burst load warmup and energy autoscaler"
 
-# Collect data for 2.5 minutes
-log_action "📈 Collecting energy-aware burst data for 2.5 minutes..."
-python3 research_data_collector.py --mode experiment --scenario energy_aware_burst_mixed --duration 150 &
+# Collect data for 3 minutes (must use integer minutes)
+log_action "📈 Collecting energy-aware burst data for 3 minutes..."
+# Duration is in minutes in the research_data_collector.py - must use integer minutes
+python3 research_data_collector.py --mode experiment --scenario energy_aware_burst_mixed --duration 3 --prometheus-url "$PROMETHEUS_URL" &
 COLLECT_PID=$!
 
 # Wait for data collection to complete
 wait $COLLECT_PID
 log_action "✅ Burst data collection completed"
+
+# Kill any remaining research_data_collector.py processes to avoid continued metric collection
+log_action "🧹 Cleaning up any lingering data collector processes..."
+pkill -f "python3 research_data_collector.py" || true
 
 # Stop autoscaler and load test
 kill $AUTOSCALER_PID 2>/dev/null || true
@@ -519,14 +529,19 @@ AUTOSCALER_PID=$!
 # Wait for stabilization
 wait_with_countdown 30 "CPU intensive load warmup and energy autoscaler"
 
-# Collect data for 3 minutes
-log_action "📈 Collecting energy-aware CPU intensive data for 3 minutes..."
-python3 research_data_collector.py --mode experiment --scenario energy_aware_cpu_intensive_mixed --duration 3 &
+# Collect data for 3.5 minutes (must use integer minutes)
+log_action "📈 Collecting energy-aware CPU intensive data for 4 minutes..."
+# Duration is in minutes in the research_data_collector.py - must use integer minutes
+python3 research_data_collector.py --mode experiment --scenario energy_aware_cpu_intensive_mixed --duration 4 --prometheus-url "$PROMETHEUS_URL" &
 COLLECT_PID=$!
 
 # Wait for data collection to complete
 wait $COLLECT_PID
 log_action "✅ CPU intensive data collection completed"
+
+# Kill any remaining research_data_collector.py processes to avoid continued metric collection
+log_action "🧹 Cleaning up any lingering data collector processes..."
+pkill -f "python3 research_data_collector.py" || true
 
 # Stop autoscaler and load test
 kill $AUTOSCALER_PID 2>/dev/null || true

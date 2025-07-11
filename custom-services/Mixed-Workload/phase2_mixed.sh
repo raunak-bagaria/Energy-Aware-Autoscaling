@@ -1,22 +1,32 @@
 #!/bin/bash
 
-# Phase 2: CPU HPA Testing Script for 20-service Mixed Workload
+# Phase 2: CPU HPA Testing Script for 7-service Mixed Workload
 # This script implements Phase 2 with traditional CPU-based Horizontal Pod Autoscaling
 
 set -e  # Exit on any error
 
-echo "⚙️ PHASE 2: CPU HPA Testing (20-Service Mixed Workload)"
-e# Collect data for 3 minutes
-log_action "📈 Collecting CPU HPA CPU-intensive data for 3 minutes..."
-python3 research_data_collector.py --mode experiment --scenario cpu_hpa_cpu_intensive_mixed --duration 180 & "======================================================="
+echo "⚙️ PHASE wait $COLLECT_PID
+log_action "✅ Data collection completed"
+
+# Wait for load test to complete
+wait $LOAD_PID
+log_action "✅ Load test completed"
+
+# Kill any remaining research_data_collector.py processes to avoid continued metric collection
+log_action "🧹 Cleaning up any lingering data collector processes..."
+pkill -f "python3 research_data_collector.py" || true
+
+# Cool down period
+wait_with_countdown 45 "system cooldown and HPA stabilization"A Testing (7-Service Mixed Workload)"
+echo "======================================================="
 echo "⏰ Start time: $(date)"
 echo "🎯 Goal: Test traditional CPU-based autoscaling"
-echo "🧮 Workload: 20-service heterogeneous workload (CPU+Memory+I/O)"
-echo "📊 Services: s0[Gateway], s1-s2,s5-s6[Memory], s4[I/O], s8,s10-s19[CPU]"
+echo "🧮 Workload: 7-service heterogeneous workload (CPU+Memory+I/O)"
+echo "📊 Services: s0[Gateway], s1-s2[Memory], s3-s4[I/O], s5[CPU], s6[CPU+Memory]"
 echo "⚡ Optimized: Short durations, consistent timing for comparison"
 echo "======================================================="
 
-# Configuration for 20-service setup
+# Configuration for 7-service setup
 GATEWAY_URL="http://192.168.49.2:31113"
 PROMETHEUS_URL="http://192.168.49.2:30000"
 EXPERIMENT_START_TIME=$(date +%Y%m%d_%H%M%S)
@@ -25,10 +35,11 @@ NAMESPACE="default"
 
 # Define services by workload type (based on actual workmodel)
 GATEWAY_SERVICES=("s0")                                           # Gateway service (no stress)
-MEMORY_SERVICES=("s1" "s2" "s6" "s9" "s12" "s13")                # Memory stress services
-IO_SERVICES=("s3" "s4" "s5" "s7" "s10" "s11" "s14" "s15" "s16" "s17" "s18" "s19")  # Disk I/O services
-CPU_SERVICES=("s8")                                               # Pure CPU service (π computation)
-ALL_SERVICES=("s0" "s1" "s2" "s3" "s4" "s5" "s6" "s7" "s8" "s9" "s10" "s11" "s12" "s13" "s14" "s15" "s16" "s17" "s18" "s19")
+MEMORY_SERVICES=("s1" "s2")                                       # Memory stress services
+IO_SERVICES=("s3" "s4")                                           # Disk I/O services
+CPU_SERVICES=("s5")                                               # Pure CPU service (π computation)
+MIXED_SERVICES=("s6")                                             # Services with both CPU and Memory
+ALL_SERVICES=("s0" "s1" "s2" "s3" "s4" "s5" "s6")
 
 # CPU HPA Parameters (optimized for mixed workload)
 CPU_TARGET_PERCENTAGE=50  # Lower threshold for mixed workload responsiveness
@@ -196,7 +207,8 @@ wait_with_countdown 30 "load warmup and HPA stabilization"
 
 # Collect data for 3 minutes
 log_action "📈 Collecting CPU HPA constant load data for 3 minutes..."
-python3 research_data_collector.py --mode experiment --scenario cpu_hpa_constant_medium_mixed --duration 180 &
+# Duration is in minutes in the research_data_collector.py - must use integer minutes
+python3 research_data_collector.py --mode experiment --scenario cpu_hpa_constant_medium_mixed --duration 3 --prometheus-url "$PROMETHEUS_URL" &
 COLLECT_PID=$!
 
 # Monitor scaling every 30 seconds
@@ -228,7 +240,8 @@ wait_with_countdown 30 "burst load warmup and HPA reaction"
 
 # Collect data for 3 minutes
 log_action "📈 Collecting CPU HPA burst data for 3 minutes..."
-python3 research_data_collector.py --mode experiment --scenario cpu_hpa_burst_mixed --duration 180 &
+# Duration is in minutes in the research_data_collector.py - must use integer minutes
+python3 research_data_collector.py --mode experiment --scenario cpu_hpa_burst_mixed --duration 3 --prometheus-url "$PROMETHEUS_URL" &
 COLLECT_PID=$!
 
 # Monitor scaling every 30 seconds
@@ -245,6 +258,10 @@ log_action "✅ Burst data collection completed"
 wait $LOAD_PID
 log_action "✅ Burst load test completed"
 
+# Kill any remaining research_data_collector.py processes to avoid continued metric collection
+log_action "🧹 Cleaning up any lingering data collector processes..."
+pkill -f "python3 research_data_collector.py" || true
+
 # Cool down period
 wait_with_countdown 45 "system cooldown and HPA reset"
 
@@ -260,7 +277,8 @@ wait_with_countdown 30 "CPU intensive load warmup and HPA reaction"
 
 # Collect data for 3 minutes
 log_action "📈 Collecting CPU HPA intensive data for 3 minutes..."
-python3 research_data_collector.py --mode experiment --scenario cpu_hpa_cpu_intensive_mixed --duration 3 &
+# Duration is in minutes in the research_data_collector.py - must use integer minutes
+python3 research_data_collector.py --mode experiment --scenario cpu_hpa_cpu_intensive_mixed --duration 4 --prometheus-url "$PROMETHEUS_URL" &
 COLLECT_PID=$!
 
 # Monitor scaling every 30 seconds during intense period
@@ -276,6 +294,10 @@ log_action "✅ CPU intensive data collection completed"
 # Wait for load test to finish
 wait $LOAD_PID
 log_action "✅ CPU intensive load test completed"
+
+# Kill any remaining research_data_collector.py processes to avoid continued metric collection
+log_action "🧹 Cleaning up any lingering data collector processes..."
+pkill -f "python3 research_data_collector.py" || true
 
 # Step 6: Show final results
 log_action "📊 Step 6: Phase 2 Results Summary"
