@@ -11,10 +11,10 @@
       "nginx-gw": true,
       "nginx-svc-type": "NodePort",
       "no-apply": false,
-      "cpu-requests": "100m",
-      "memory-requests": "128Mi",
-      "cpu-limits": "1000m",
-      "memory-limits": "512Mi"
+      "cpu-requests": "50m",
+      "memory-requests": "64Mi",
+      "cpu-limits": "400m",
+      "memory-limits": "256Mi"
    },
    "InternalServiceFilePath": "CustomFunctions",
    "OutputPath": "SimulationWorkspace",
